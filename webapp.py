@@ -99,7 +99,7 @@ def upload_resources():
             session["cl_json"] = str(cl_json_path)
             session["taxonomy"] = str(taxonomy_path)
             session["model_dir"] = model_dir
-            return redirect(url_for("run_pipeline"))
+            return redirect(url_for("run_pipeline_route"))
         flash("All files required")
     return render_template_string(UPLOAD_RESOURCES_HTML)
 
