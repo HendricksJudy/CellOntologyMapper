@@ -23,6 +23,7 @@ import contextlib
 import io
 import logging
 import json
+import traceback
 from werkzeug.utils import secure_filename
 
 import colormaps as cmaps
@@ -93,6 +94,11 @@ es.onmessage = (e) => {
     img.src = '/files/' + data.filename;
     img.style.width = '300px';
     results.appendChild(img);
+  } else if (data.type === 'error') {
+    const div = document.createElement('div');
+    div.style.color = 'red';
+    div.textContent = data.message;
+    results.appendChild(div);
   } else if (data.type === 'done') {
     es.close();
   }
@@ -161,13 +167,17 @@ def pipeline_worker(h5ad: Path, cl_json: Path, taxonomy: Path, model_dir: Path) 
                 plot_umap(adata, key, f"Trophoblast – {label}", palette, figpath, size=6)
                 figs.append(figpath)
             adata.obs.to_csv(out_csv)
+    except Exception:
+        logging.exception("Pipeline failed")
+        event_queue.put(json.dumps({"type": "error", "message": traceback.format_exc()}))
+    else:
+        event_queue.put(json.dumps({"type": "csv", "filename": out_csv.name}))
+        for f in figs:
+            event_queue.put(json.dumps({"type": "figure", "filename": f.name}))
     finally:
         writer.flush()
         root_logger.removeHandler(handler)
-    event_queue.put(json.dumps({"type": "csv", "filename": out_csv.name}))
-    for f in figs:
-        event_queue.put(json.dumps({"type": "figure", "filename": f.name}))
-    event_queue.put(json.dumps({"type": "done"}))
+        event_queue.put(json.dumps({"type": "done"}))
 
 
 
