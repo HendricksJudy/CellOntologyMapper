@@ -19,22 +19,10 @@ from flask import (
 )
 from threading import Thread
 from queue import Queue
-import contextlib
-import io
-import logging
 import json
-import traceback
+import subprocess
+import sys
 from werkzeug.utils import secure_filename
-
-import colormaps as cmaps
-
-from interactive_trophoblast_pipeline import (
-    load_adata,
-    clean_celltype_predictions,
-    palette_from_categories,
-    run_mapper,
-    plot_umap,
-)
 
 
 app = Flask(__name__)
@@ -109,75 +97,37 @@ es.onmessage = (e) => {
 event_queue: Queue[str] = Queue()
 pipeline_started = False
 
-class QueueWriter(io.TextIOBase):
-    def __init__(self, queue: Queue[str]):
-        self.queue = queue
-        self.buf = ""
-
-    def write(self, msg: str) -> int:
-        self.buf += msg
-        while "\n" in self.buf:
-            line, self.buf = self.buf.split("\n", 1)
-            line = line.strip()
-            if line:
-                self.queue.put_nowait(json.dumps({"type": "log", "message": line}))
-        return len(msg)
-
-    def flush(self) -> None:
-        if self.buf.strip():
-            self.queue.put_nowait(json.dumps({"type": "log", "message": self.buf.strip()}))
-        self.buf = ""
 
 def pipeline_worker(h5ad: Path, cl_json: Path, taxonomy: Path, model_dir: Path) -> None:
-    figdir = UPLOAD_DIR
-    writer = QueueWriter(event_queue)
-    handler = logging.StreamHandler(writer)
-    root_logger = logging.getLogger()
-    root_logger.addHandler(handler)
-    figs: list[Path] = []
+    cmd = [
+        sys.executable,
+        "monitor_pipeline.py",
+        str(h5ad),
+        str(cl_json),
+        str(taxonomy),
+        str(model_dir),
+        "--figdir",
+        str(UPLOAD_DIR),
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in process.stdout:
+        event_queue.put(json.dumps({"type": "log", "message": line.rstrip()}))
+    returncode = process.wait()
+    if returncode != 0:
+        event_queue.put(json.dumps({"type": "error", "message": f'Pipeline exited with code {returncode}'}))
     out_csv = h5ad.with_name(h5ad.stem + "_annotated.csv")
-    try:
-        with contextlib.redirect_stdout(writer):
-            adata = load_adata(h5ad)
-            clean_celltype_predictions(adata)
-            cats = list(adata.obs["celltype_predictions"].cat.categories)
-            adata.uns["celltype_predictions_colors"] = palette_from_categories(cats, cmaps.cet_g_bw_minc_minl)
-            plot_umap(adata, "celltype_predictions", "Trophoblast (author labels)", adata.uns["celltype_predictions_colors"], figdir / "umap_trophoblast_author.png", size=6)
-            adata = run_mapper(adata, cl_json, taxonomy, model_dir)
-            map_targets = {
-                "enhanced_cell_ontology": "Cell Ontology term",
-                "enhanced_cell_ontology_taxonomy_match": "Cell Taxonomy term",
-                "enhanced_cell_ontology_ct_id": "Cell Taxonomy ID",
-                "enhanced_cell_ontology_cl_id": "Cell Ontology ID",
-            }
-            figs = [figdir / "umap_trophoblast_author.png"]
-            for key, label in map_targets.items():
-                mapping = (
-                    adata.obs[["celltype_predictions", key]]
-                    .drop_duplicates()
-                    .set_index("celltype_predictions")[key]
-                    .to_dict()
-                )
-                palette = {
-                    mapping[k]: adata.uns["celltype_predictions_colors"][i]
-                    for i, k in enumerate(mapping.keys())
-                    if k in mapping
-                }
-                figpath = figdir / f"umap_trophoblast_{key}.png"
-                plot_umap(adata, key, f"Trophoblast – {label}", palette, figpath, size=6)
-                figs.append(figpath)
-            adata.obs.to_csv(out_csv)
-    except Exception:
-        logging.exception("Pipeline failed")
-        event_queue.put(json.dumps({"type": "error", "message": traceback.format_exc()}))
-    else:
-        event_queue.put(json.dumps({"type": "csv", "filename": out_csv.name}))
-        for f in figs:
-            event_queue.put(json.dumps({"type": "figure", "filename": f.name}))
-    finally:
-        writer.flush()
-        root_logger.removeHandler(handler)
-        event_queue.put(json.dumps({"type": "done"}))
+    event_queue.put(json.dumps({"type": "csv", "filename": out_csv.name}))
+    figs = ["umap_trophoblast_author.png"]
+    for key in [
+        "enhanced_cell_ontology",
+        "enhanced_cell_ontology_taxonomy_match",
+        "enhanced_cell_ontology_ct_id",
+        "enhanced_cell_ontology_cl_id",
+    ]:
+        figs.append(f"umap_trophoblast_{key}.png")
+    for fig in figs:
+        event_queue.put(json.dumps({"type": "figure", "filename": fig}))
+    event_queue.put(json.dumps({"type": "done"}))
 
 
 
