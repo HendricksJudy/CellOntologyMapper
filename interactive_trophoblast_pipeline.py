@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Robust end-to-end pipeline for single-cell trophoblast data (interactive)
+Robust end-to-end pipeline for single-cell trophoblast data (interactive).
+Optionally displays UMAP plots similar to the development notebook.
 """
 from __future__ import annotations
 
@@ -91,6 +92,7 @@ def plot_umap(
     palette: list[str] | dict[str, str],
     out_path: Path,
     size: int = 10,
+    show: bool = False,
 ) -> None:
     fig, ax = ov.plt.subplots(figsize=(3, 3))
     ov.pl.embedding(
@@ -99,7 +101,7 @@ def plot_umap(
         color=colour_key,
         title=title,
         palette=palette,
-        show=False,
+        show=show,
         ax=ax,
         size=size,
     )
@@ -108,6 +110,8 @@ def plot_umap(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     LOGGER.info("Saved %s", out_path)
+    if show:
+        ov.plt.show()
 
 
 def run_mapper(
@@ -169,6 +173,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("taxonomy", nargs="?", type=Path)
     parser.add_argument("model_dir", nargs="?", type=Path)
     parser.add_argument("--figdir", type=Path, default=Path("figures"))
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Display plots in a window in addition to saving them",
+    )
     args = parser.parse_args(argv)
     if not all((args.h5ad, args.cl_json, args.taxonomy, args.model_dir)):
         LOGGER.warning("Missing CLI arguments – entering interactive mode.")
@@ -193,6 +202,7 @@ def main(argv: list[str] | None = None) -> None:
         colour_list,
         args.figdir / "umap_trophoblast_author.png",
         size=6,
+        show=args.show,
     )
     adata = run_mapper(adata, args.cl_json, args.taxonomy, args.model_dir)
     map_targets = {
@@ -220,6 +230,7 @@ def main(argv: list[str] | None = None) -> None:
             palette,
             args.figdir / f"umap_trophoblast_{key}.png",
             size=6,
+            show=args.show,
         )
     out_csv = args.h5ad.with_name(args.h5ad.stem + "_annotated.csv")
     adata.obs.to_csv(out_csv)
